@@ -1,130 +1,104 @@
-"""API Backend: FastAPI application with lifespan, routers, and middleware."""
-
 import logging
-import os
-from contextlib import asynccontextmanager
+import sys
 
-import httpx
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from prometheus_fastapi_instrumentator import Instrumentator
+import redis.asyncio as redis
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi import FastAPI
 from pythonjsonlogger import jsonlogger
 
-from app.config import settings
-from app.database import engine
-from app.metrics import OPTIMIZER_SCORE, VEHICLES_AVAILABLE, ROUTES_UTILIZED_RATIO, ORDERS_CREATED, MISS_EVENTS
-from app.routers import upload, forecasts, vehicles, orders, analytics, config
+from .config import settings
+from .database import engine, get_session
+from .routers import analytics, config, forecasts, network, orders, upload, vehicles
+from .scheduler import check_vehicle_returns, run_forecast_cycle
 
-log_level = settings.LOG_LEVEL.upper()
-logger = logging.getLogger()
-handler = logging.StreamHandler()
-handler.setFormatter(jsonlogger.JsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
-logger.addHandler(handler)
-logger.setLevel(getattr(logging, log_level, logging.INFO))
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    from alembic.config import Config as AlembicConfig
-    from alembic import command
-    try:
-        alembic_cfg = AlembicConfig("alembic.ini")
-        alembic_cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("+asyncpg", ""))
-        command.upgrade(alembic_cfg, "head")
-        logger.info("Alembic migrations applied")
-    except Exception:
-        logger.warning("Alembic migration failed (may already be applied)", exc_info=True)
-
-    try:
-        from apscheduler.schedulers.asyncio import AsyncIOScheduler
-        from app.scheduler import run_forecast_cycle, check_vehicle_returns
-
-        scheduler = AsyncIOScheduler()
-        scheduler.add_job(run_forecast_cycle, "interval", minutes=30, id="forecast_cycle")
-        scheduler.add_job(check_vehicle_returns, "interval", minutes=5, id="vehicle_returns")
-        scheduler.start()
-        logger.info("APScheduler started")
-        app.state.scheduler = scheduler
-    except Exception:
-        logger.warning("Failed to start scheduler", exc_info=True)
-
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{settings.INFERENCE_URL}/health")
-            logger.info("Inference service warm-up: %s", resp.json())
-    except Exception:
-        logger.warning("Inference service not reachable during startup")
-
-    yield
-
-    if hasattr(app.state, "scheduler"):
-        app.state.scheduler.shutdown(wait=False)
-    await engine.dispose()
-
-
-app = FastAPI(title="Transport Dispatch API", version="1.0.0", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS.split(","),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(
+    jsonlogger.JsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s")
 )
+logging.root.handlers = [handler]
+logging.root.setLevel(getattr(logging, settings.LOG_LEVEL, logging.INFO))
 
-Instrumentator().instrument(app).expose(app)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Transport Dispatch API", version="0.1.0")
 
 app.include_router(upload.router)
 app.include_router(forecasts.router)
 app.include_router(vehicles.router)
 app.include_router(orders.router)
 app.include_router(analytics.router)
+app.include_router(network.router)
 app.include_router(config.router)
 
+scheduler = AsyncIOScheduler()
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled exception")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "type": "about:blank",
-            "title": "Internal Server Error",
-            "status": 500,
-            "detail": str(exc),
-        },
-        media_type="application/problem+json",
+
+@app.on_event("startup")
+async def startup() -> None:
+    from .database import Base
+
+    scheduler.add_job(
+        run_forecast_cycle,
+        "interval",
+        minutes=settings.SCHEDULER_FORECAST_INTERVAL_MIN,
+        id="forecast_cycle",
+        replace_existing=True,
     )
+    scheduler.add_job(
+        check_vehicle_returns,
+        "interval",
+        minutes=settings.SCHEDULER_VEHICLE_CHECK_INTERVAL_MIN,
+        id="vehicle_check",
+        replace_existing=True,
+    )
+    scheduler.start()
+    logger.info("Scheduler started")
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    scheduler.shutdown(wait=False)
+    await engine.dispose()
+    logger.info("Shutdown complete")
 
 
 @app.get("/health")
 async def health():
-    checks = {}
+    checks = {"db": "error", "redis": "error", "inference": "error"}
 
     try:
         from sqlalchemy import text
-        from app.database import async_session
-        async with async_session() as session:
-            await session.execute(text("SELECT 1"))
-        checks["database"] = "ok"
-    except Exception as e:
-        checks["database"] = f"error: {e}"
+
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception:
+        pass
 
     try:
-        import redis.asyncio as aioredis
-        r = aioredis.from_url(settings.REDIS_URL)
+        r = redis.from_url(settings.REDIS_URL)
         await r.ping()
+        await r.close()
         checks["redis"] = "ok"
-        await r.aclose()
-    except Exception as e:
-        checks["redis"] = f"error: {e}"
+    except Exception:
+        pass
 
     try:
+        import httpx
+
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{settings.INFERENCE_URL}/health")
-            checks["inference"] = resp.json()
-    except Exception as e:
-        checks["inference"] = f"error: {e}"
+            if resp.status_code == 200:
+                checks["inference"] = "ok"
+    except Exception:
+        pass
 
-    status = "ok" if all(v == "ok" or (isinstance(v, dict) and v.get("status") == "ok") for v in checks.values()) else "degraded"
+    status = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
     return {"status": status, "checks": checks}
+
+
+@app.post("/internal/trigger-cycle")
+async def trigger_cycle():
+    """Manually trigger one full scheduler cycle."""
+    summary = await run_forecast_cycle()
+    return summary

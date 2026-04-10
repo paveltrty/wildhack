@@ -1,18 +1,17 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Column, DateTime, Float, String
 
-from .base import Base
+from ..database import Base
 
 
 class RouteMetadata(Base):
     __tablename__ = "route_metadata"
 
-    route_id: Mapped[str] = mapped_column(String, primary_key=True)
-    office_from_id: Mapped[str] = mapped_column(String, nullable=False)
-    avg_duration_min: Mapped[float] = mapped_column(Float, nullable=False)
-    stddev_duration_min: Mapped[float] = mapped_column(Float, default=0.0)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    route_id = Column(String, primary_key=True)
+    office_from_id = Column(String, nullable=False)
+    avg_duration_min = Column(Float, nullable=False, default=120.0)
+    stddev_duration_min = Column(Float, default=15.0)
+    updated_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

@@ -1,22 +1,22 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Integer, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Column, DateTime, Float, Integer, String
 
-from .base import Base
+from ..database import Base
 
 
 class WarehouseConfig(Base):
     __tablename__ = "warehouse_config"
 
-    warehouse_id: Mapped[str] = mapped_column(String, primary_key=True)
-    gazel_capacity: Mapped[float] = mapped_column(Float, nullable=False, default=10.0)
-    fura_capacity: Mapped[float] = mapped_column(Float, nullable=False, default=40.0)
-    lead_time_min: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
-    safety_factor: Mapped[float] = mapped_column(Float, nullable=False, default=1.05)
-    alpha: Mapped[float] = mapped_column(Float, nullable=False, default=0.7)
-    beta: Mapped[float] = mapped_column(Float, nullable=False, default=0.3)
-    travel_buffer_min: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    warehouse_id = Column(String, primary_key=True)
+    gazel_capacity = Column(Float, default=10.0)
+    fura_capacity = Column(Float, default=40.0)
+    lead_time_min = Column(Integer, default=60)
+    safety_factor = Column(Float, default=1.05)
+    alpha = Column(Float, default=0.7)
+    beta = Column(Float, default=0.3)
+    travel_buffer_min = Column(Integer, default=15)
+    avg_route_duration_min = Column(Float, default=120.0)
+    updated_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

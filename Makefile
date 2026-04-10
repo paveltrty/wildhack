@@ -1,10 +1,10 @@
-.PHONY: up down build logs migrate seed ps restart-api shell-api shell-db
+.PHONY: up down build logs migrate demo seed ps shell-api shell-db trigger-cycle
 
 up:
 	docker compose up -d
 
 down:
-	docker compose down
+	docker compose down -v
 
 build:
 	docker compose build --no-cache
@@ -15,17 +15,20 @@ logs:
 migrate:
 	docker compose exec api alembic upgrade head
 
-seed:
-	docker compose exec api python -m app.scripts.seed_demo_data
+demo:
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml up
+
+demo-d:
+	docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
 
 ps:
 	docker compose ps
-
-restart-api:
-	docker compose restart api
 
 shell-api:
 	docker compose exec api bash
 
 shell-db:
 	docker compose exec postgres psql -U dispatch dispatch
+
+trigger-cycle:
+	curl -s -X POST http://localhost/api/internal/trigger-cycle | python3 -m json.tool

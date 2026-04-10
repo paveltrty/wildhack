@@ -1,43 +1,60 @@
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
-import { ScoreDecision } from "../api/client";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Cell,
+  Line,
+  ComposedChart,
+  Legend,
+} from 'recharts';
 
-interface Props {
-  decisions: ScoreDecision[];
+interface ScoreData {
+  horizon: string;
+  y_hat_future: number;
+  confidence: number;
+  isChosen: boolean;
 }
 
-export default function ScoreProfile({ decisions }: Props) {
-  const latest = decisions[0];
-  if (!latest) return <p>No data</p>;
+interface Props {
+  data: ScoreData[];
+}
 
-  const chartData = Object.entries(latest.scores_by_horizon)
-    .map(([h, score]) => ({
-      horizon: `h${h}`,
-      score,
-      isOptimal: parseInt(h) === latest.optimal_horizon,
-    }))
-    .sort((a, b) => parseInt(a.horizon.slice(1)) - parseInt(b.horizon.slice(1)));
-
+export default function ScoreProfile({ data }: Props) {
   return (
-    <div>
-      <div style={{ fontSize: 13, color: "#64748b", marginBottom: 8 }}>
-        Optimal: <strong>h{latest.optimal_horizon}</strong> (score: {latest.optimal_score.toFixed(3)})
-      </div>
-      <ResponsiveContainer width="100%" height={260}>
-        <BarChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-          <XAxis dataKey="horizon" tick={{ fontSize: 12 }} />
-          <YAxis tick={{ fontSize: 12 }} domain={[0, 1]} />
-          <Tooltip
-            contentStyle={{ borderRadius: 8, fontSize: 12 }}
-            formatter={(value: number) => value.toFixed(3)}
-          />
-          <Bar dataKey="score" radius={[4, 4, 0, 0]}>
-            {chartData.map((entry, idx) => (
-              <Cell key={idx} fill={entry.isOptimal ? "#f59e0b" : "#93c5fd"} />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
+    <ResponsiveContainer width="100%" height={300}>
+      <ComposedChart data={data}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+        <XAxis dataKey="horizon" tick={{ fill: '#8b949e', fontSize: 11 }} />
+        <YAxis yAxisId="left" tick={{ fill: '#8b949e', fontSize: 11 }} />
+        <YAxis yAxisId="right" orientation="right" tick={{ fill: '#8b949e', fontSize: 11 }} domain={[0, 1]} />
+        <Tooltip
+          contentStyle={{
+            background: '#1c2128',
+            border: '1px solid #30363d',
+            borderRadius: 6,
+            color: '#e1e4e8',
+          }}
+        />
+        <Legend />
+        <Bar yAxisId="left" dataKey="y_hat_future" name="Score" barSize={24}>
+          {data.map((entry, idx) => (
+            <Cell key={idx} fill={entry.isChosen ? '#d29922' : '#58a6ff'} />
+          ))}
+        </Bar>
+        <Line
+          yAxisId="right"
+          type="monotone"
+          dataKey="confidence"
+          stroke="#3fb950"
+          name="Confidence"
+          dot={false}
+          strokeWidth={2}
+        />
+      </ComposedChart>
+    </ResponsiveContainer>
   );
 }

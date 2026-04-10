@@ -24,24 +24,7 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
-      timeout: 5s
       retries: 5
-
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.11.3
-    restart: always
-    command: >
-      mlflow server
-      --backend-store-uri sqlite:////mlflow/db/mlflow.db
-      --default-artifact-root /mlflow/artifacts
-      --host 0.0.0.0
-      --port 5000
-    volumes:
-      - mlflow_artifacts:/mlflow/artifacts
-      - mlflow_db:/mlflow/db
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   inference:
     build:
@@ -53,12 +36,9 @@ services:
       - LOG_LEVEL=info
     volumes:
       - ./services/inference/models:/models:ro
-    depends_on:
-      - redis
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
-      timeout: 10s
       retries: 3
 
   api:
@@ -70,7 +50,6 @@ services:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-dispatch}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-dispatch}
       - REDIS_URL=redis://redis:6379/0
       - INFERENCE_URL=http://inference:8001
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
       - SECRET_KEY=${SECRET_KEY}
       - LOG_LEVEL=info
     depends_on:
@@ -83,7 +62,6 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
-      timeout: 10s
       retries: 3
 
   frontend:
@@ -96,47 +74,17 @@ services:
     depends_on:
       - api
 
-  prometheus:
-    image: prom/prometheus:v2.51.2
-    restart: always
-    volumes:
-      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheusdata:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.retention.time=30d'
-
-  grafana:
-    image: grafana/grafana:10.4.2
-    restart: always
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafanadata:/var/lib/grafana
-      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
-    depends_on:
-      - prometheus
-
   nginx:
     image: nginx:1.25-alpine
     restart: always
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./infra/nginx/certs:/etc/nginx/certs:ro
     depends_on:
       - frontend
       - api
-      - grafana
-      - mlflow
 
 volumes:
   pgdata:
   redisdata:
-  mlflow_artifacts:
-  mlflow_db:
-  prometheusdata:
-  grafanadata:

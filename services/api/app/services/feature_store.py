@@ -1,109 +1,108 @@
-"""Build feature rows from raw_events for inference service."""
-
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.raw_events import RawEvent
+from ..models.raw_events import RawEvent
 
 logger = logging.getLogger(__name__)
 
-STATUS_COLS = [f"status_{i}" for i in range(1, 9)]
-MAX_POINTS_PER_ROUTE = 336  # as implied by model feature requirements
 
-
-async def get_actual_shipments(
+async def get_features(
     session: AsyncSession,
-    office_from_id: str,
+    warehouse_id: str,
     now: datetime,
-    lookback_minutes: int,
-) -> float:
-    """Sum pipeline_velocity across all routes for the lookback window.
-
-    Each RawEvent row records per-30-min throughput as pipeline_velocity.
-    Summing over [now - lookback, now) gives actual shipments for that period.
-    """
-    if lookback_minutes <= 0:
-        return 0.0
-
-    window_start = now - timedelta(minutes=lookback_minutes)
-
-    result = await session.execute(
-        select(func.coalesce(func.sum(RawEvent.pipeline_velocity), 0.0)).where(
-            and_(
-                RawEvent.office_from_id == office_from_id,
-                RawEvent.timestamp >= window_start,
-                RawEvent.timestamp < now,
-            )
-        )
-    )
-    return float(result.scalar() or 0.0)
-
-
-async def get_features_for_inference(
-    session: AsyncSession,
-    office_from_id: str,
-    run_ts: datetime,
 ) -> list[dict]:
     """
-    Query raw_events for all routes of the warehouse.
-    Pull the last 336+ timestamps per route (needed for rolling features).
-    Return the full history for the inference service to compute features.
+    Build feature rows for each route belonging to the warehouse.
+    Returns one feature dict per route (the latest raw_events row per route
+    within the last 2 hours), enriched with derived features.
     """
-    # IMPORTANT: do not ship the full raw history to inference.
-    # Use a window function to take the latest N points per route.
-    rn = func.row_number().over(
-        partition_by=RawEvent.route_id,
-        order_by=RawEvent.timestamp.desc(),
-    ).label("rn")
+    cutoff = now - timedelta(hours=2)
 
-    subq = (
-        select(RawEvent, rn)
-        .where(
-            and_(
-                RawEvent.office_from_id == office_from_id,
-                RawEvent.timestamp <= run_ts,
-            )
+    latest_subq = (
+        select(
+            RawEvent.route_id,
+            RawEvent.office_from_id,
+            RawEvent.timestamp,
+            RawEvent.status_1,
+            RawEvent.status_2,
+            RawEvent.status_3,
+            RawEvent.status_4,
+            RawEvent.status_5,
+            RawEvent.status_6,
+            RawEvent.status_7,
+            RawEvent.status_8,
+            RawEvent.pipeline_velocity,
         )
+        .where(RawEvent.office_from_id == warehouse_id)
+        .where(RawEvent.timestamp >= cutoff)
+        .order_by(RawEvent.route_id, RawEvent.timestamp.desc())
+        .distinct(RawEvent.route_id)
         .subquery()
     )
 
-    # Note: ordering by route_id,timestamp makes inference-side grouping stable.
-    events_q = (
-        select(subq)
-        .where(subq.c.rn <= MAX_POINTS_PER_ROUTE)
-        .order_by(subq.c.route_id, subq.c.timestamp)
-    )
-    result = await session.execute(events_q)
-    rows_raw = result.mappings().all()
-    if not rows_raw:
+    result = await session.execute(select(latest_subq))
+    rows = result.all()
+
+    if not rows:
+        logger.warning(
+            "No recent events for warehouse %s since %s",
+            warehouse_id,
+            cutoff.isoformat(),
+        )
         return []
 
-    rows = []
-    for ev in rows_raw:
-        pipeline_vel = sum(
-            (ev.get(f"status_{i}") or 0) for i in range(1, 9)
+    features: list[dict] = []
+    for row in rows:
+        velocity = row.pipeline_velocity or sum(
+            getattr(row, f"status_{i}", 0) or 0 for i in range(1, 9)
         )
-        rows.append({
-            "route_id": ev["route_id"],
-            "office_from_id": ev["office_from_id"],
-            "timestamp": ev["timestamp"].isoformat(),
-            "status_1": ev.get("status_1") or 0.0,
-            "status_2": ev.get("status_2") or 0.0,
-            "status_3": ev.get("status_3") or 0.0,
-            "status_4": ev.get("status_4") or 0.0,
-            "status_5": ev.get("status_5") or 0.0,
-            "status_6": ev.get("status_6") or 0.0,
-            "status_7": ev.get("status_7") or 0.0,
-            "status_8": ev.get("status_8") or 0.0,
-            "target_2h": ev.get("target_2h"),
-            "pipeline_velocity": pipeline_vel,
-            "hour_of_day": ev["timestamp"].hour,
-            "day_of_week": ev["timestamp"].weekday(),
-            "rolling_mean_2h": pipeline_vel,
-            "rolling_std_2h": 0.0,
-        })
 
-    return rows
+        rolling_rows_result = await session.execute(
+            select(RawEvent.pipeline_velocity)
+            .where(RawEvent.route_id == row.route_id)
+            .where(RawEvent.timestamp <= row.timestamp)
+            .where(RawEvent.timestamp >= row.timestamp - timedelta(hours=2))
+            .order_by(RawEvent.timestamp.desc())
+            .limit(4)
+        )
+        rolling_values = [r[0] or 0.0 for r in rolling_rows_result.all()]
+
+        rolling_mean = sum(rolling_values) / max(len(rolling_values), 1)
+        rolling_std = (
+            (sum((v - rolling_mean) ** 2 for v in rolling_values) / max(len(rolling_values), 1))
+            ** 0.5
+            if len(rolling_values) > 1
+            else 0.0
+        )
+
+        ts = row.timestamp
+        features.append(
+            {
+                "route_id": row.route_id,
+                "office_from_id": row.office_from_id,
+                "timestamp": ts.isoformat(),
+                "status_1": row.status_1 or 0.0,
+                "status_2": row.status_2 or 0.0,
+                "status_3": row.status_3 or 0.0,
+                "status_4": row.status_4 or 0.0,
+                "status_5": row.status_5 or 0.0,
+                "status_6": row.status_6 or 0.0,
+                "status_7": row.status_7 or 0.0,
+                "status_8": row.status_8 or 0.0,
+                "pipeline_velocity": velocity,
+                "hour_of_day": ts.hour,
+                "day_of_week": ts.weekday(),
+                "rolling_mean_2h": rolling_mean,
+                "rolling_std_2h": rolling_std,
+            }
+        )
+
+    logger.info(
+        "Built %d feature rows for warehouse %s",
+        len(features),
+        warehouse_id,
+    )
+    return features

@@ -1,25 +1,67 @@
-import { useState, useCallback } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, WarehouseConfig } from "../api/client";
-import UploadModal from "../components/UploadModal";
+import { useState, useEffect, useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api } from '../api/client';
+import type { WarehouseConfigData } from '../api/client';
+import UploadModal from '../components/UploadModal';
+
+const numSort = (a: string, b: string) => {
+  const na = parseInt(a, 10);
+  const nb = parseInt(b, 10);
+  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+  return a.localeCompare(b);
+};
+
+const cardStyle: React.CSSProperties = {
+  background: '#0d1117',
+  border: '1px solid #21262d',
+  borderRadius: 12,
+  padding: 24,
+  marginBottom: 24,
+};
+
+const inputStyle: React.CSSProperties = {
+  background: '#161b22',
+  border: '1px solid #30363d',
+  color: '#e1e4e8',
+  borderRadius: 8,
+  padding: '8px 12px',
+  fontSize: 13,
+  width: '100%',
+  boxSizing: 'border-box',
+  outline: 'none',
+};
+
+const labelStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#8b949e',
+  marginBottom: 4,
+  display: 'block',
+  fontWeight: 600,
+};
 
 export default function Settings() {
-  const qc = useQueryClient();
-  const [warehouseId, setWarehouseId] = useState("");
+  const [warehouse, setWarehouse] = useState('');
   const [showUpload, setShowUpload] = useState(false);
+  const [configForm, setConfigForm] = useState<Partial<WarehouseConfigData>>({});
+  const [saved, setSaved] = useState(false);
+  const queryClient = useQueryClient();
 
-  const { data: config } = useQuery({
-    queryKey: ["config", warehouseId],
-    queryFn: () => api.getConfig(warehouseId),
-    enabled: !!warehouseId,
-    retry: false,
+  const { data: warehouses } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: () => api.getWarehouses(),
   });
 
-  const [form, setForm] = useState<Partial<WarehouseConfig>>({});
+  const effectiveWarehouse = warehouse || (warehouses ?? [])[0] || '';
 
-  const handleLoad = useCallback(() => {
+  const { data: config } = useQuery({
+    queryKey: ['config', effectiveWarehouse],
+    queryFn: () => api.getConfig(effectiveWarehouse),
+    enabled: !!effectiveWarehouse,
+  });
+
+  useEffect(() => {
     if (config) {
-      setForm({
+      setConfigForm({
         gazel_capacity: config.gazel_capacity,
         fura_capacity: config.fura_capacity,
         lead_time_min: config.lead_time_min,
@@ -27,129 +69,185 @@ export default function Settings() {
         alpha: config.alpha,
         beta: config.beta,
         travel_buffer_min: config.travel_buffer_min,
+        avg_route_duration_min: config.avg_route_duration_min,
       });
+      setSaved(false);
     }
   }, [config]);
 
-  const save = useMutation({
-    mutationFn: () => api.updateConfig(warehouseId, form),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["config", warehouseId] }),
-  });
+  const handleSaveConfig = useCallback(async () => {
+    if (!effectiveWarehouse) return;
+    await api.updateConfig(effectiveWarehouse, configForm);
+    queryClient.invalidateQueries({ queryKey: ['config'] });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }, [effectiveWarehouse, configForm, queryClient]);
+
+  const configFields: Array<{
+    key: keyof WarehouseConfigData;
+    label: string;
+    type: 'number' | 'range';
+    min?: number;
+    max?: number;
+    step?: number;
+  }> = [
+    { key: 'gazel_capacity', label: 'Ёмкость газели', type: 'number', min: 1, step: 0.5 },
+    { key: 'fura_capacity', label: 'Ёмкость фуры', type: 'number', min: 1, step: 1 },
+    { key: 'lead_time_min', label: 'Lead time (мин)', type: 'number', min: 0 },
+    { key: 'safety_factor', label: 'Запас (safety factor)', type: 'range', min: 1.0, max: 1.5, step: 0.01 },
+    { key: 'alpha', label: 'Alpha (штраф за нехватку)', type: 'range', min: 0, max: 1, step: 0.05 },
+    { key: 'beta', label: 'Beta (штраф за простой)', type: 'range', min: 0, max: 1, step: 0.05 },
+    { key: 'travel_buffer_min', label: 'Буфер на дорогу (мин)', type: 'number', min: 0 },
+    { key: 'avg_route_duration_min', label: 'Ср. длительность маршрута (мин)', type: 'number', min: 10 },
+  ];
+
+  const selectStyle: React.CSSProperties = {
+    ...inputStyle,
+    cursor: 'pointer',
+    width: 'auto',
+    minWidth: 160,
+  };
 
   return (
     <div>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 16 }}>Settings</h1>
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 700, color: '#e1e4e8', marginBottom: 4 }}>
+          Настройки
+        </h1>
+        <p style={{ color: '#8b949e', fontSize: 14, margin: 0 }}>
+          Параметры оптимизатора по складам и загрузка данных
+        </p>
+      </div>
 
-      <div style={{ display: "flex", gap: 12, marginBottom: 24, alignItems: "center" }}>
-        <input
-          placeholder="Warehouse ID"
-          value={warehouseId}
-          onChange={(e) => setWarehouseId(e.target.value)}
-          style={inputStyle}
-        />
-        <button onClick={handleLoad} disabled={!config} style={{ ...btnStyle, opacity: config ? 1 : 0.5 }}>
-          Load Config
+      {/* Warehouse selector */}
+      <div
+        style={{
+          display: 'flex',
+          gap: 12,
+          alignItems: 'center',
+          padding: '14px 18px',
+          background: '#161b22',
+          borderRadius: 12,
+          border: '1px solid #21262d',
+          marginBottom: 20,
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <label style={{ fontSize: 11, color: '#8b949e', fontWeight: 600, textTransform: 'uppercase' }}>
+            Склад
+          </label>
+          <select
+            value={warehouse}
+            onChange={(e) => setWarehouse(e.target.value)}
+            style={selectStyle}
+          >
+            {[...(warehouses ?? [])].sort(numSort).map((w) => (
+              <option key={w} value={w}>Склад {w}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Config */}
+      <div style={cardStyle}>
+        <h3 style={{ fontSize: 16, color: '#e1e4e8', fontWeight: 600, marginBottom: 16 }}>
+          Параметры оптимизатора
+        </h3>
+        {config ? (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+              {configFields.map((field) => (
+                <div key={field.key}>
+                  <label style={labelStyle}>
+                    {field.label}
+                    {field.type === 'range' && (
+                      <span style={{ float: 'right', color: '#58a6ff', fontWeight: 700 }}>
+                        {(configForm[field.key] as number)?.toFixed(2) ?? ''}
+                      </span>
+                    )}
+                  </label>
+                  {field.type === 'range' ? (
+                    <input
+                      type="range"
+                      min={field.min}
+                      max={field.max}
+                      step={field.step}
+                      value={(configForm[field.key] as number) ?? 0}
+                      onChange={(e) =>
+                        setConfigForm((prev) => ({ ...prev, [field.key]: parseFloat(e.target.value) }))
+                      }
+                      style={{ width: '100%', accentColor: '#58a6ff' }}
+                    />
+                  ) : (
+                    <input
+                      type="number"
+                      min={field.min}
+                      step={field.step}
+                      value={(configForm[field.key] as number) ?? ''}
+                      onChange={(e) =>
+                        setConfigForm((prev) => ({ ...prev, [field.key]: parseFloat(e.target.value) }))
+                      }
+                      style={inputStyle}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 20 }}>
+              <button
+                onClick={handleSaveConfig}
+                style={{
+                  background: '#238636',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: '8px 24px',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                Сохранить
+              </button>
+              {saved && <span style={{ color: '#3fb950', fontSize: 13 }}>Сохранено</span>}
+            </div>
+          </>
+        ) : (
+          <div style={{ color: '#6e7681' }}>Выберите склад для настройки.</div>
+        )}
+      </div>
+
+      {/* Upload */}
+      <div style={cardStyle}>
+        <h3 style={{ fontSize: 16, color: '#e1e4e8', fontWeight: 600, marginBottom: 16 }}>
+          Загрузка данных
+        </h3>
+        <p style={{ color: '#8b949e', fontSize: 13, marginBottom: 16 }}>
+          Загрузите файл Parquet с данными маршрутов для обновления прогнозов.
+        </p>
+        <button
+          onClick={() => setShowUpload(true)}
+          style={{
+            background: '#21262d',
+            color: '#e1e4e8',
+            border: '1px solid #30363d',
+            borderRadius: 8,
+            padding: '10px 24px',
+            cursor: 'pointer',
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          Загрузить Parquet
         </button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-        <div style={cardStyle}>
-          <h2 style={cardTitle}>Warehouse Configuration</h2>
-
-          <div style={{ display: "grid", gap: 16 }}>
-            <Field label="Gazel Capacity (units)" value={form.gazel_capacity ?? 10} onChange={(v) => setForm({ ...form, gazel_capacity: v })} />
-            <Field label="Fura Capacity (units)" value={form.fura_capacity ?? 40} onChange={(v) => setForm({ ...form, fura_capacity: v })} />
-            <SliderField label="Lead Time (min)" min={15} max={180} step={5} value={form.lead_time_min ?? 60} onChange={(v) => setForm({ ...form, lead_time_min: v })} />
-            <SliderField label="Safety Factor" min={1.0} max={1.5} step={0.05} value={form.safety_factor ?? 1.05} onChange={(v) => setForm({ ...form, safety_factor: v })} />
-            <SliderField label="Miss Penalty (alpha)" min={0.5} max={0.9} step={0.05} value={form.alpha ?? 0.7} onChange={(v) => setForm({ ...form, alpha: v, beta: Math.round((1 - v) * 100) / 100 })} />
-            <Field label="Overflow Penalty (beta = 1 - alpha)" value={form.beta ?? 0.3} onChange={() => {}} disabled />
-            <Field label="Travel Buffer (min)" value={form.travel_buffer_min ?? 15} onChange={(v) => setForm({ ...form, travel_buffer_min: v })} />
-
-            <button onClick={() => save.mutate()} disabled={!warehouseId} style={btnStyle}>
-              Save Configuration
-            </button>
-          </div>
-        </div>
-
-        <div style={cardStyle}>
-          <h2 style={cardTitle}>Upload Data</h2>
-          <p style={{ fontSize: 13, color: "#64748b", marginBottom: 16 }}>
-            Upload a parquet file containing shipment event data.
-          </p>
-          <button onClick={() => setShowUpload(true)} style={btnStyle}>
-            Upload Parquet File
-          </button>
-        </div>
-      </div>
-
-      {showUpload && <UploadModal onClose={() => setShowUpload(false)} />}
+      {showUpload && (
+        <UploadModal
+          onClose={() => setShowUpload(false)}
+          onSuccess={() => queryClient.invalidateQueries()}
+        />
+      )}
     </div>
   );
 }
-
-function Field({ label, value, onChange, disabled }: { label: string; value: number; onChange: (v: number) => void; disabled?: boolean }) {
-  return (
-    <div>
-      <label style={{ fontSize: 12, fontWeight: 600, color: "#475569", display: "block", marginBottom: 4 }}>{label}</label>
-      <input
-        type="number"
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-        disabled={disabled}
-        style={{ ...inputStyle, width: "100%", boxSizing: "border-box", background: disabled ? "#f1f5f9" : "#fff" }}
-      />
-    </div>
-  );
-}
-
-function SliderField({ label, min, max, step, value, onChange }: { label: string; min: number; max: number; step: number; value: number; onChange: (v: number) => void }) {
-  return (
-    <div>
-      <label style={{ fontSize: 12, fontWeight: 600, color: "#475569", display: "block", marginBottom: 4 }}>
-        {label}: <strong>{value}</strong>
-      </label>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        style={{ width: "100%" }}
-      />
-    </div>
-  );
-}
-
-const inputStyle: React.CSSProperties = {
-  padding: "8px 12px",
-  border: "1px solid #cbd5e1",
-  borderRadius: 6,
-  fontSize: 13,
-  outline: "none",
-};
-
-const btnStyle: React.CSSProperties = {
-  padding: "8px 16px",
-  background: "#3b82f6",
-  color: "#fff",
-  border: "none",
-  borderRadius: 6,
-  cursor: "pointer",
-  fontSize: 13,
-  fontWeight: 600,
-};
-
-const cardStyle: React.CSSProperties = {
-  background: "#fff",
-  borderRadius: 12,
-  padding: 24,
-  boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-};
-
-const cardTitle: React.CSSProperties = {
-  fontSize: 16,
-  fontWeight: 600,
-  marginBottom: 16,
-  color: "#1e293b",
-};

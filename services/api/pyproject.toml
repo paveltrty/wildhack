@@ -1,6 +1,6 @@
 [project]
-name = "api-service"
-version = "1.0.0"
+name = "api"
+version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi",
@@ -12,12 +12,10 @@ dependencies = [
     "redis",
     "aiohttp",
     "pandas",
-    "pyarrow",
     "numpy",
+    "pyarrow",
     "pydantic",
-    "pydantic-settings",
-    "prometheus-fastapi-instrumentator",
+    "python-multipart",
     "python-json-logger",
-    "mlflow",
     "httpx",
 ]

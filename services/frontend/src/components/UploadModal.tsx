@@ -1,145 +1,140 @@
-import { useState, useCallback } from "react";
-import { api } from "../api/client";
+import { useState, useRef, useCallback } from 'react';
+import { api } from '../api/client';
 
 interface Props {
   onClose: () => void;
+  onSuccess: () => void;
 }
 
-export default function UploadModal({ onClose }: Props) {
-  const [file, setFile] = useState<File | null>(null);
-  const [dragging, setDragging] = useState(false);
-  const [result, setResult] = useState<{ rows_inserted: number; warehouses: string[]; routes: string[] } | null>(null);
-  const [error, setError] = useState("");
+const overlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(0,0,0,0.7)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 300,
+};
+
+const modalStyle: React.CSSProperties = {
+  background: '#161b22',
+  border: '1px solid #30363d',
+  borderRadius: 12,
+  padding: 32,
+  width: 480,
+  maxWidth: '90vw',
+};
+
+const dropZoneStyle: React.CSSProperties = {
+  border: '2px dashed #30363d',
+  borderRadius: 8,
+  padding: 40,
+  textAlign: 'center',
+  color: '#8b949e',
+  cursor: 'pointer',
+  transition: 'border-color 0.2s',
+};
+
+export default function UploadModal({ onClose, onSuccess }: Props) {
   const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState<{ rows_inserted: number; actuals_inserted: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    const f = e.dataTransfer.files[0];
-    if (f && f.name.endsWith(".parquet")) {
-      setFile(f);
-      setError("");
-    } else {
-      setError("Please drop a .parquet file");
-    }
-  }, []);
-
-  const handleUpload = async () => {
-    if (!file) return;
+  const handleFile = useCallback(async (file: File) => {
+    setError(null);
+    setResult(null);
     setUploading(true);
-    setError("");
     try {
       const res = await api.uploadFile(file);
       setResult(res);
+      onSuccess();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed");
+      setError(e instanceof Error ? e.message : 'Upload failed');
     } finally {
       setUploading(false);
     }
-  };
+  }, [onSuccess]);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      const file = e.dataTransfer.files[0];
+      if (file) handleFile(file);
+    },
+    [handleFile]
+  );
 
   return (
-    <div style={overlayStyle}>
-      <div style={modalStyle}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700 }}>Upload Parquet Data</h2>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>
-            &times;
-          </button>
+    <div style={overlayStyle} onClick={onClose}>
+      <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+        <h2 style={{ color: '#e1e4e8', fontSize: 18, fontWeight: 700, marginBottom: 20 }}>Upload Data</h2>
+
+        <div
+          style={{ ...dropZoneStyle, borderColor: dragOver ? '#58a6ff' : '#30363d' }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          onClick={() => inputRef.current?.click()}
+        >
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".parquet"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleFile(file);
+            }}
+          />
+          {uploading ? (
+            <span style={{ color: '#58a6ff' }}>Uploading...</span>
+          ) : (
+            <>
+              <div style={{ fontSize: 14, marginBottom: 8 }}>
+                Drop .parquet file here or click to browse
+              </div>
+              <div style={{ fontSize: 12, color: '#6e7681' }}>
+                Requires: route_id, office_from_id, timestamp, status_1..8
+              </div>
+            </>
+          )}
         </div>
 
-        {!result ? (
-          <>
-            <div
-              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={handleDrop}
-              style={{
-                border: `2px dashed ${dragging ? "#3b82f6" : "#cbd5e1"}`,
-                borderRadius: 12,
-                padding: 40,
-                textAlign: "center",
-                cursor: "pointer",
-                background: dragging ? "#eff6ff" : "#f8fafc",
-                transition: "all 0.2s",
-              }}
-              onClick={() => {
-                const input = document.createElement("input");
-                input.type = "file";
-                input.accept = ".parquet";
-                input.onchange = (e) => {
-                  const f = (e.target as HTMLInputElement).files?.[0];
-                  if (f) { setFile(f); setError(""); }
-                };
-                input.click();
-              }}
-            >
-              {file ? (
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#1e293b" }}>{file.name}</div>
-                  <div style={{ fontSize: 12, color: "#64748b" }}>{(file.size / 1024 / 1024).toFixed(1)} MB</div>
-                </div>
-              ) : (
-                <div style={{ color: "#64748b", fontSize: 14 }}>
-                  Drag & drop a .parquet file here, or click to browse
-                </div>
-              )}
+        {result && (
+          <div style={{ marginTop: 16, padding: 14, background: '#0d1117', borderRadius: 8, border: '1px solid #238636' }}>
+            <div style={{ color: '#3fb950', fontWeight: 600, marginBottom: 6 }}>Upload successful</div>
+            <div style={{ color: '#8b949e', fontSize: 13 }}>
+              Rows: {result.rows_inserted} · Actuals: {result.actuals_inserted}
             </div>
-
-            {error && <p style={{ color: "#ef4444", fontSize: 13, marginTop: 8 }}>{error}</p>}
-
-            <button
-              onClick={handleUpload}
-              disabled={!file || uploading}
-              style={{
-                marginTop: 16,
-                padding: "10px 24px",
-                background: file ? "#3b82f6" : "#94a3b8",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                cursor: file ? "pointer" : "default",
-                fontSize: 14,
-                fontWeight: 600,
-                width: "100%",
-              }}
-            >
-              {uploading ? "Uploading..." : "Upload"}
-            </button>
-          </>
-        ) : (
-          <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 48, marginBottom: 8, color: "#22c55e" }}>&#10003;</div>
-            <p style={{ fontWeight: 600, marginBottom: 8 }}>Upload Successful</p>
-            <p style={{ fontSize: 13, color: "#64748b" }}>
-              {result.rows_inserted} rows inserted across {result.warehouses.length} warehouses
-              and {result.routes.length} routes.
-            </p>
-            <button onClick={onClose} style={{ marginTop: 16, padding: "8px 20px", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
-              Close
-            </button>
           </div>
         )}
+
+        {error && (
+          <div style={{ marginTop: 16, padding: 14, background: '#0d1117', borderRadius: 8, border: '1px solid #f85149' }}>
+            <div style={{ color: '#f85149', fontSize: 13 }}>{error}</div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 20, textAlign: 'right' }}>
+          <button
+            onClick={onClose}
+            style={{
+              background: '#21262d',
+              color: '#e1e4e8',
+              border: '1px solid #30363d',
+              borderRadius: 6,
+              padding: '8px 20px',
+              cursor: 'pointer',
+              fontSize: 14,
+            }}
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );
 }
-
-const overlayStyle: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.4)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1000,
-};
-
-const modalStyle: React.CSSProperties = {
-  background: "#fff",
-  borderRadius: 16,
-  padding: 28,
-  minWidth: 400,
-  maxWidth: 500,
-  boxShadow: "0 12px 48px rgba(0,0,0,0.2)",
-};

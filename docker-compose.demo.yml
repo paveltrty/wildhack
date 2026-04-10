@@ -1,0 +1,20 @@
+services:
+  demo-runner:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+    command: python -m app.demo.runner
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-dispatch}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB:-dispatch}
+      - REDIS_URL=redis://redis:6379/0
+      - INFERENCE_URL=http://inference:8001
+      - DEMO_MODE=true
+      - DEMO_WAREHOUSES=3
+      - DEMO_ROUTES_PER_WAREHOUSE=5
+      - DEMO_VEHICLES_GAZEL=4
+      - DEMO_VEHICLES_FURA=2
+      - DEMO_HISTORY_DAYS=7
+      - DEMO_CYCLE_INTERVAL_SEC=10
+    depends_on:
+      api:
+        condition: service_healthy

@@ -1,18 +1,23 @@
-"""Application configuration loaded from environment variables."""
-
-from pydantic_settings import BaseSettings
+import os
 
 
-class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql+asyncpg://dispatch:dispatch@postgres/dispatch"
-    REDIS_URL: str = "redis://redis:6379/0"
-    INFERENCE_URL: str = "http://inference:8001"
-    MLFLOW_TRACKING_URI: str = "http://mlflow:5000"
-    SECRET_KEY: str = "change_me"
-    LOG_LEVEL: str = "info"
-    CORS_ORIGINS: str = "*"
+class Settings:
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://dispatch:dispatch@localhost/dispatch",
+    )
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    INFERENCE_URL: str = os.getenv("INFERENCE_URL", "http://localhost:8001")
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key")
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "info").upper()
+    DEMO_MODE: bool = os.getenv("DEMO_MODE", "false").lower() == "true"
 
-    model_config = {"env_file": ".env", "extra": "ignore"}
+    SCHEDULER_FORECAST_INTERVAL_MIN: int = int(
+        os.getenv("SCHEDULER_FORECAST_INTERVAL_MIN", "30")
+    )
+    SCHEDULER_VEHICLE_CHECK_INTERVAL_MIN: int = int(
+        os.getenv("SCHEDULER_VEHICLE_CHECK_INTERVAL_MIN", "5")
+    )
 
 
 settings = Settings()

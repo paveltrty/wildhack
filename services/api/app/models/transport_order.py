@@ -1,34 +1,45 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Index, Integer, String, Text, func
+from sqlalchemy import Column, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
 
-from .base import Base
+from ..database import Base
 
 
 class TransportOrder(Base):
     __tablename__ = "transport_order"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    warehouse_id: Mapped[str] = mapped_column(String, nullable=False)
-    scheduled_departure: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    vehicle_type: Mapped[str] = mapped_column(String, nullable=False)
-    vehicle_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    capacity_units: Mapped[float] = mapped_column(Float, nullable=False)
-    chosen_horizon: Mapped[int] = mapped_column(Integer, nullable=False)
-    optimizer_score: Mapped[float] = mapped_column(Float, nullable=False)
-    status: Mapped[str] = mapped_column(String, nullable=False, default="draft")
-    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    route_id = Column(String, nullable=False)
+    office_from_id = Column(String, nullable=False)
+    scheduled_departure = Column(DateTime(timezone=True), nullable=False)
+
+    # Legacy single-type fields (nullable for backward compat)
+    vehicle_type = Column(String, nullable=True)
+    vehicle_count = Column(Integer, nullable=True)
+
+    fura_count = Column(Integer, nullable=False, default=0, server_default="0")
+    gazel_count = Column(Integer, nullable=False, default=0, server_default="0")
+
+    capacity_units = Column(Float, nullable=False)
+    planned_volume = Column(Float, nullable=True)
+
+    chosen_horizon = Column(Integer, nullable=False)
+    optimizer_score = Column(Float, nullable=False)
+    y_hat_future = Column(Float, nullable=False)
+    status = Column(String, nullable=False, default="draft")
+    notes = Column(Text, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
     __table_args__ = (
-        Index("ix_order_warehouse_departure", "warehouse_id", "scheduled_departure"),
-        Index("ix_order_status", "status"),
+        Index("ix_order_office_departure", "office_from_id", "scheduled_departure"),
+        Index("ix_order_route_status", "route_id", "status"),
     )
